@@ -48,6 +48,9 @@ class Team(Base, UUIDMixin, TimestampMixin):
     executions: Mapped[list["Execution"]] = relationship(
         "Execution", back_populates="team", cascade="all, delete-orphan"
     )
+    nodes: Mapped[list["Node"]] = relationship(
+        "Node", back_populates="team", cascade="all, delete-orphan"
+    )
 
 
 class Execution(Base, UUIDMixin, TimestampMixin):
@@ -96,3 +99,7 @@ class ExecutionLog(Base, UUIDMixin):
 
     # Relationships
     execution: Mapped["Execution"] = relationship("Execution", back_populates="logs")
+
+
+# Import for type hints (avoid circular imports)
+from aiops_agent_executor.db.models.agent import Node  # noqa: E402, F401

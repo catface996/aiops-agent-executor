@@ -1,5 +1,13 @@
 """Database models package."""
 
+from aiops_agent_executor.db.models.agent import (
+    Agent,
+    AgentStatus,
+    Node,
+    NodeAgent,
+    NodeStatus,
+    NodeType,
+)
 from aiops_agent_executor.db.models.provider import (
     Credential,
     Endpoint,
@@ -20,6 +28,13 @@ from aiops_agent_executor.db.models.team import (
 )
 
 __all__ = [
+    # Agent models
+    "Agent",
+    "AgentStatus",
+    "Node",
+    "NodeAgent",
+    "NodeStatus",
+    "NodeType",
     # Provider models
     "Provider",
     "ProviderType",
