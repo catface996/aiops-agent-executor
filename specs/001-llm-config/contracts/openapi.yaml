@@ -1,0 +1,924 @@
+openapi: 3.1.0
+info:
+  title: AIOps Agent Executor - LLM配置管理 API
+  version: 1.0.0
+  description: LLM供应商配置管理接口，包括供应商、接入点、密钥和模型管理
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: 开发环境
+
+tags:
+  - name: providers
+    description: 供应商管理
+  - name: endpoints
+    description: 接入点管理
+  - name: credentials
+    description: 密钥管理
+  - name: models
+    description: 模型管理
+
+paths:
+  /providers:
+    post:
+      tags: [providers]
+      summary: 创建供应商
+      operationId: createProvider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderCreate'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+    get:
+      tags: [providers]
+      summary: 获取供应商列表
+      operationId: listProviders
+      parameters:
+        - name: skip
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: is_active
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProviderResponse'
+
+  /providers/{provider_id}:
+    get:
+      tags: [providers]
+      summary: 获取供应商详情
+      operationId: getProvider
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags: [providers]
+      summary: 更新供应商
+      operationId: updateProvider
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderUpdate'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [providers]
+      summary: 删除供应商
+      operationId: deleteProvider
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '204':
+          description: 删除成功
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /providers/{provider_id}/status:
+    patch:
+      tags: [providers]
+      summary: 更新供应商状态
+      operationId: updateProviderStatus
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+        - name: is_active
+          in: query
+          required: true
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: 状态更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /providers/{provider_id}/endpoints:
+    post:
+      tags: [endpoints]
+      summary: 创建接入点
+      operationId: createEndpoint
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EndpointCreate'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EndpointResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    get:
+      tags: [endpoints]
+      summary: 获取接入点列表
+      operationId: listProviderEndpoints
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EndpointResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /endpoints/{endpoint_id}:
+    put:
+      tags: [endpoints]
+      summary: 更新接入点
+      operationId: updateEndpoint
+      parameters:
+        - $ref: '#/components/parameters/EndpointId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EndpointUpdate'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EndpointResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [endpoints]
+      summary: 删除接入点
+      operationId: deleteEndpoint
+      parameters:
+        - $ref: '#/components/parameters/EndpointId'
+      responses:
+        '204':
+          description: 删除成功
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /endpoints/{endpoint_id}/health-check:
+    post:
+      tags: [endpoints]
+      summary: 健康检查
+      operationId: healthCheckEndpoint
+      parameters:
+        - $ref: '#/components/parameters/EndpointId'
+      responses:
+        '200':
+          description: 检查完成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /providers/{provider_id}/credentials:
+    post:
+      tags: [credentials]
+      summary: 添加密钥
+      operationId: createCredential
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialCreate'
+      responses:
+        '201':
+          description: 添加成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    get:
+      tags: [credentials]
+      summary: 获取密钥列表
+      operationId: listProviderCredentials
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CredentialResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /credentials/{credential_id}:
+    put:
+      tags: [credentials]
+      summary: 更新密钥
+      operationId: updateCredential
+      parameters:
+        - $ref: '#/components/parameters/CredentialId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialUpdate'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [credentials]
+      summary: 删除密钥
+      operationId: deleteCredential
+      parameters:
+        - $ref: '#/components/parameters/CredentialId'
+      responses:
+        '204':
+          description: 删除成功
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /credentials/{credential_id}/validate:
+    post:
+      tags: [credentials]
+      summary: 验证密钥
+      operationId: validateCredential
+      parameters:
+        - $ref: '#/components/parameters/CredentialId'
+      responses:
+        '200':
+          description: 验证完成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /providers/{provider_id}/models:
+    post:
+      tags: [models]
+      summary: 手动添加模型
+      operationId: createModel
+      description: 为不支持自动同步的供应商（如Ollama、vLLM）手动添加模型配置
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelCreate'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /providers/{provider_id}/models/sync:
+    post:
+      tags: [models]
+      summary: 同步模型列表
+      operationId: syncProviderModels
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '200':
+          description: 同步成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ModelResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /models:
+    get:
+      tags: [models]
+      summary: 获取所有模型
+      operationId: listModels
+      parameters:
+        - name: skip
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: provider_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/ModelType'
+        - name: capability
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ModelStatus'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ModelResponse'
+
+  /models/{model_id}:
+    get:
+      tags: [models]
+      summary: 获取模型详情
+      operationId: getModel
+      parameters:
+        - $ref: '#/components/parameters/ModelId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags: [models]
+      summary: 更新模型配置
+      operationId: updateModel
+      parameters:
+        - $ref: '#/components/parameters/ModelId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelUpdate'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /models/by-capability/{capability}:
+    get:
+      tags: [models]
+      summary: 按能力查询模型
+      operationId: getModelsByCapability
+      parameters:
+        - name: capability
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ModelResponse'
+
+components:
+  parameters:
+    ProviderId:
+      name: provider_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    EndpointId:
+      name: endpoint_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    CredentialId:
+      name: credential_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    ModelId:
+      name: model_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    ProviderType:
+      type: string
+      enum: [openai, anthropic, aws_bedrock, azure_openai, aliyun_dashscope, baidu_qianfan, ollama, vllm]
+
+    ProviderCreate:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        type:
+          $ref: '#/components/schemas/ProviderType'
+        description:
+          type: string
+
+    ProviderUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+        is_active:
+          type: boolean
+
+    ProviderResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/ProviderType'
+        description:
+          type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    HealthStatus:
+      type: string
+      enum: [healthy, degraded, unhealthy]
+
+    EndpointCreate:
+      type: object
+      required: [name, base_url]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        base_url:
+          type: string
+          format: uri
+        api_version:
+          type: string
+        region:
+          type: string
+        timeout_connect:
+          type: integer
+          default: 30
+        timeout_read:
+          type: integer
+          default: 120
+        retry_count:
+          type: integer
+          default: 3
+        is_default:
+          type: boolean
+          default: false
+
+    EndpointUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        base_url:
+          type: string
+          format: uri
+        api_version:
+          type: string
+        region:
+          type: string
+        timeout_connect:
+          type: integer
+        timeout_read:
+          type: integer
+        retry_count:
+          type: integer
+        is_default:
+          type: boolean
+        is_active:
+          type: boolean
+
+    EndpointResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        provider_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        base_url:
+          type: string
+        api_version:
+          type: string
+        region:
+          type: string
+        timeout_connect:
+          type: integer
+        timeout_read:
+          type: integer
+        retry_count:
+          type: integer
+        is_default:
+          type: boolean
+        is_active:
+          type: boolean
+        health_status:
+          $ref: '#/components/schemas/HealthStatus'
+        last_health_check:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    HealthCheckResult:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        latency_ms:
+          type: integer
+        checked_at:
+          type: string
+          format: date-time
+        details:
+          type: object
+          properties:
+            dns_resolution:
+              type: string
+            tcp_connection:
+              type: string
+            ssl_handshake:
+              type: string
+            api_response:
+              type: string
+
+    CredentialCreate:
+      type: object
+      required: [alias, api_key]
+      properties:
+        alias:
+          type: string
+          maxLength: 100
+        api_key:
+          type: string
+          writeOnly: true
+        secret_key:
+          type: string
+          writeOnly: true
+        expires_at:
+          type: string
+          format: date-time
+        quota_limit:
+          type: integer
+
+    CredentialUpdate:
+      type: object
+      properties:
+        alias:
+          type: string
+        api_key:
+          type: string
+          writeOnly: true
+        secret_key:
+          type: string
+          writeOnly: true
+        expires_at:
+          type: string
+          format: date-time
+        quota_limit:
+          type: integer
+        is_active:
+          type: boolean
+
+    CredentialResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        provider_id:
+          type: string
+          format: uuid
+        alias:
+          type: string
+        api_key_hint:
+          type: string
+          description: 脱敏显示，格式 ****xxxx
+        has_secret_key:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+        quota_limit:
+          type: integer
+        quota_used:
+          type: integer
+        is_active:
+          type: boolean
+        last_validated_at:
+          type: string
+          format: date-time
+        validation_status:
+          type: string
+          enum: [valid, invalid, expired, quota_exceeded]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        validated_at:
+          type: string
+          format: date-time
+        details:
+          type: object
+          properties:
+            account_status:
+              type: string
+            remaining_quota:
+              type: integer
+            rate_limit:
+              type: string
+            permissions:
+              type: array
+              items:
+                type: string
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+
+    ModelType:
+      type: string
+      enum: [chat, completion, embedding, vision]
+
+    ModelStatus:
+      type: string
+      enum: [available, maintenance, deprecated]
+
+    ModelCreate:
+      type: object
+      required: [model_id, name, model_type]
+      properties:
+        model_id:
+          type: string
+          maxLength: 100
+          description: 供应商模型ID（如 gpt-4, claude-3-opus）
+        name:
+          type: string
+          maxLength: 200
+          description: 模型显示名称
+        model_type:
+          $ref: '#/components/schemas/ModelType'
+        context_window:
+          type: integer
+          description: 上下文窗口大小
+        max_output_tokens:
+          type: integer
+          description: 最大输出Token数
+        input_price:
+          type: number
+          description: 输入价格（每千Token）
+        output_price:
+          type: number
+          description: 输出价格（每千Token）
+        capabilities:
+          type: object
+          description: 能力标签
+
+    ModelUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        context_window:
+          type: integer
+        max_output_tokens:
+          type: integer
+        input_price:
+          type: number
+        output_price:
+          type: number
+        capabilities:
+          type: object
+        status:
+          $ref: '#/components/schemas/ModelStatus'
+
+    ModelResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        provider_id:
+          type: string
+          format: uuid
+        model_id:
+          type: string
+        name:
+          type: string
+        model_type:
+          $ref: '#/components/schemas/ModelType'
+        context_window:
+          type: integer
+        max_output_tokens:
+          type: integer
+        input_price:
+          type: number
+        output_price:
+          type: number
+        capabilities:
+          type: object
+        status:
+          $ref: '#/components/schemas/ModelStatus'
+        synced_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+        code:
+          type: string
+
+  responses:
+    BadRequest:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Conflict:
+      description: 资源冲突
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    ServiceUnavailable:
+      description: 服务不可用
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

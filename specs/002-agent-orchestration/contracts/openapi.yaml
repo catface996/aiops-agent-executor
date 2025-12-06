@@ -1,0 +1,615 @@
+openapi: 3.1.0
+info:
+  title: Agent Team Orchestration API
+  description: API for managing Agent teams and executions
+  version: 1.0.0
+
+servers:
+  - url: /api/v1
+    description: API v1
+
+paths:
+  /teams:
+    get:
+      summary: List all teams
+      operationId: listTeams
+      tags: [Teams]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/TeamStatus'
+        - name: skip
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        '200':
+          description: List of teams
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TeamResponse'
+
+    post:
+      summary: Create a new team
+      operationId: createTeam
+      tags: [Teams]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamCreate'
+      responses:
+        '201':
+          description: Team created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '409':
+          description: Team name conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /teams/{team_id}:
+    get:
+      summary: Get team by ID
+      operationId: getTeam
+      tags: [Teams]
+      parameters:
+        - $ref: '#/components/parameters/TeamId'
+      responses:
+        '200':
+          description: Team details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamResponse'
+        '404':
+          description: Team not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    patch:
+      summary: Update team
+      operationId: updateTeam
+      tags: [Teams]
+      parameters:
+        - $ref: '#/components/parameters/TeamId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamUpdate'
+      responses:
+        '200':
+          description: Team updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamResponse'
+        '400':
+          description: Validation error
+        '404':
+          description: Team not found
+
+    delete:
+      summary: Delete team
+      operationId: deleteTeam
+      tags: [Teams]
+      parameters:
+        - $ref: '#/components/parameters/TeamId'
+      responses:
+        '204':
+          description: Team deleted
+        '404':
+          description: Team not found
+        '409':
+          description: Team has running executions
+
+  /teams/{team_id}/validate:
+    post:
+      summary: Validate team topology
+      operationId: validateTeamTopology
+      tags: [Teams]
+      parameters:
+        - $ref: '#/components/parameters/TeamId'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopologyValidationResult'
+
+  /teams/{team_id}/executions:
+    get:
+      summary: List executions for a team
+      operationId: listTeamExecutions
+      tags: [Executions]
+      parameters:
+        - $ref: '#/components/parameters/TeamId'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ExecutionStatus'
+        - name: start_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: skip
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        '200':
+          description: List of executions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExecutionResponse'
+
+    post:
+      summary: Trigger team execution
+      operationId: triggerExecution
+      tags: [Executions]
+      parameters:
+        - $ref: '#/components/parameters/TeamId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionCreate'
+      responses:
+        '201':
+          description: Execution started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionResponse'
+        '400':
+          description: Invalid team or configuration
+        '404':
+          description: Team not found
+        '429':
+          description: Too many concurrent executions
+
+  /executions/{execution_id}:
+    get:
+      summary: Get execution details
+      operationId: getExecution
+      tags: [Executions]
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      responses:
+        '200':
+          description: Execution details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionDetailResponse'
+        '404':
+          description: Execution not found
+
+  /executions/{execution_id}/cancel:
+    post:
+      summary: Cancel running execution
+      operationId: cancelExecution
+      tags: [Executions]
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+      responses:
+        '200':
+          description: Execution cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionResponse'
+        '400':
+          description: Execution not running
+        '404':
+          description: Execution not found
+
+  /executions/{execution_id}/stream:
+    get:
+      summary: Stream execution events (SSE)
+      operationId: streamExecution
+      tags: [Executions]
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+        - name: Last-Event-ID
+          in: header
+          description: Resume from event ID for reconnection
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream
+        '404':
+          description: Execution not found
+
+  /executions/{execution_id}/logs:
+    get:
+      summary: Get execution logs
+      operationId: getExecutionLogs
+      tags: [Executions]
+      parameters:
+        - $ref: '#/components/parameters/ExecutionId'
+        - name: event_type
+          in: query
+          schema:
+            type: string
+        - name: node_id
+          in: query
+          schema:
+            type: string
+        - name: skip
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        '200':
+          description: Execution logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExecutionLogResponse'
+
+components:
+  parameters:
+    TeamId:
+      name: team_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    ExecutionId:
+      name: execution_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    TeamStatus:
+      type: string
+      enum: [active, inactive, error]
+
+    ExecutionStatus:
+      type: string
+      enum: [pending, running, success, failed, timeout, cancelled]
+
+    NodeType:
+      type: string
+      enum: [global_supervisor, node_supervisor, agent]
+
+    AgentConfig:
+      type: object
+      required: [role, model_id]
+      properties:
+        role:
+          type: string
+          description: Agent role description
+        instructions:
+          type: string
+          description: Detailed instructions for the agent
+        model_id:
+          type: string
+          format: uuid
+          description: Reference to LLM model
+        tools:
+          type: array
+          items:
+            type: string
+          description: List of tool names
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+          default: 0.7
+        max_tokens:
+          type: integer
+          minimum: 1
+          default: 4096
+
+    NodeConfig:
+      type: object
+      required: [id, name, type, agent_config]
+      properties:
+        id:
+          type: string
+          pattern: '^[a-z0-9_-]+$'
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/NodeType'
+        agent_config:
+          $ref: '#/components/schemas/AgentConfig'
+        metadata:
+          type: object
+          additionalProperties: true
+
+    EdgeConfig:
+      type: object
+      required: [source, target]
+      properties:
+        source:
+          type: string
+          description: Source node ID
+        target:
+          type: string
+          description: Target node ID
+        condition:
+          type: string
+          description: Conditional expression for routing
+
+    TopologyConfig:
+      type: object
+      required: [nodes, edges, entry_point]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeConfig'
+          minItems: 1
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/EdgeConfig'
+        entry_point:
+          type: string
+          description: Entry node ID
+        output_schema:
+          type: object
+          description: Expected output JSON Schema
+
+    TeamCreate:
+      type: object
+      required: [name, topology_config]
+      properties:
+        name:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+        topology_config:
+          $ref: '#/components/schemas/TopologyConfig'
+        timeout_seconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+          default: 300
+        max_iterations:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+
+    TeamUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+        topology_config:
+          $ref: '#/components/schemas/TopologyConfig'
+        timeout_seconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+        max_iterations:
+          type: integer
+          minimum: 1
+          maximum: 200
+        status:
+          $ref: '#/components/schemas/TeamStatus'
+
+    TeamResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        topology_config:
+          $ref: '#/components/schemas/TopologyConfig'
+        timeout_seconds:
+          type: integer
+        max_iterations:
+          type: integer
+        status:
+          $ref: '#/components/schemas/TeamStatus'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ExecutionCreate:
+      type: object
+      required: [task]
+      properties:
+        task:
+          type: string
+          description: Task description for the team
+        parameters:
+          type: object
+          additionalProperties: true
+          description: Optional input parameters
+        output_schema:
+          type: object
+          description: Expected output JSON Schema
+
+    ExecutionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        team_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/ExecutionStatus'
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        duration_ms:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    ExecutionDetailResponse:
+      allOf:
+        - $ref: '#/components/schemas/ExecutionResponse'
+        - type: object
+          properties:
+            input_data:
+              type: object
+            output_data:
+              type: object
+            output_schema:
+              type: object
+            node_results:
+              type: object
+              additionalProperties: true
+            error_message:
+              type: string
+            topology_snapshot:
+              $ref: '#/components/schemas/TopologyConfig'
+
+    ExecutionLogResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+        node_id:
+          type: string
+        agent_id:
+          type: string
+        supervisor_id:
+          type: string
+        message:
+          type: string
+        extra_data:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+
+    TopologyValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              code:
+                type: string
+              message:
+                type: string
+              node_id:
+                type: string
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+
+    ValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+              msg:
+                type: string
+              type:
+                type: string
+
+tags:
+  - name: Teams
+    description: Team management operations
+  - name: Executions
+    description: Execution management and streaming
