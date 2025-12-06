@@ -60,6 +60,9 @@ class Execution(Base, UUIDMixin, TimestampMixin):
     )
     input_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
     output_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    topology_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    output_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    node_results: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[ExecutionStatus] = mapped_column(
         Enum(ExecutionStatus), default=ExecutionStatus.PENDING, nullable=False
     )

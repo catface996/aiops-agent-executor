@@ -33,6 +33,23 @@ from aiops_agent_executor.schemas.team import (
     TeamCreatedResponse,
     TeamResponse,
 )
+from aiops_agent_executor.schemas.topology import (
+    AgentConfig as TopologyAgentConfig,
+    EdgeConfig as TopologyEdgeConfig,
+    NodeConfig as TopologyNodeConfig,
+    TopologyConfig,
+    TopologyValidationError,
+    TopologyValidationResult,
+)
+from aiops_agent_executor.schemas.execution import (
+    ExecutionCreate,
+    ExecutionDetailResponse,
+    ExecutionListResponse,
+    ExecutionLogResponse,
+    ExecutionLogsListResponse,
+    ExecutionCancelResponse,
+    NodeResultResponse,
+)
 
 __all__ = [
     # Common
@@ -65,4 +82,19 @@ __all__ = [
     "ExecutionResponse",
     "StructuredOutputRequest",
     "StructuredOutputResponse",
+    # Topology
+    "TopologyAgentConfig",
+    "TopologyEdgeConfig",
+    "TopologyNodeConfig",
+    "TopologyConfig",
+    "TopologyValidationError",
+    "TopologyValidationResult",
+    # Execution (new)
+    "ExecutionCreate",
+    "ExecutionDetailResponse",
+    "ExecutionListResponse",
+    "ExecutionLogResponse",
+    "ExecutionLogsListResponse",
+    "ExecutionCancelResponse",
+    "NodeResultResponse",
 ]

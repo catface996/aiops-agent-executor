@@ -5,11 +5,15 @@
 """
 
 import uuid
+from datetime import datetime, UTC
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aiops_agent_executor.db.models.team import TeamStatus
 from aiops_agent_executor.db.session import get_db_session
 from aiops_agent_executor.schemas import (
     ExecutionRequest,
@@ -19,7 +23,21 @@ from aiops_agent_executor.schemas import (
     TeamCreate,
     TeamCreatedResponse,
     TeamResponse,
+    TopologyValidationResult,
+    TopologyValidationError,
 )
+from aiops_agent_executor.services.execution_service import ExecutionService
+from aiops_agent_executor.services.team_service import TeamService
+
+
+class TeamUpdate(BaseModel):
+    """Schema for updating a team."""
+    team_name: str | None = None
+    description: str | None = None
+    topology: dict[str, Any] | None = None
+    timeout_seconds: int | None = None
+    max_iterations: int | None = None
+    status: TeamStatus | None = None
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -109,10 +127,26 @@ async def create_team(
     db: AsyncSession = Depends(get_db_session),
 ) -> TeamCreatedResponse:
     """根据拓扑配置创建Agent团队"""
-    # TODO: Implement team creation logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="团队创建功能尚未实现",
+    service = TeamService(db)
+    team = await service.create_team(team_in)
+    await db.commit()
+
+    # Generate topology summary
+    topology = team.topology_config
+    nodes = topology.get("nodes", [])
+    edges = topology.get("edges", [])
+    topology_summary = {
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "agent_count": sum(len(n.get("agents", [])) for n in nodes),
+        "has_global_supervisor": topology.get("global_supervisor") is not None,
+    }
+
+    return TeamCreatedResponse(
+        team_id=team.id,
+        status="created",
+        created_at=team.created_at,
+        topology_summary=topology_summary,
     )
 
 
@@ -145,11 +179,23 @@ async def list_teams(
     db: AsyncSession = Depends(get_db_session),
 ) -> list[TeamResponse]:
     """获取Agent团队列表"""
-    # TODO: Implement team listing logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="团队列表功能尚未实现",
-    )
+    service = TeamService(db)
+
+    # Parse status filter
+    team_status = None
+    if status_filter:
+        try:
+            team_status = TeamStatus(status_filter)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status filter: {status_filter}. Valid values: active, inactive, error",
+            )
+
+    skip = (page - 1) * size
+    teams, _total = await service.list_teams(skip=skip, limit=size, status=team_status)
+
+    return [TeamResponse.model_validate(team) for team in teams]
 
 
 @router.get(
@@ -175,11 +221,10 @@ async def get_team(
     db: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
     """获取指定团队的详细信息"""
-    # TODO: Implement team retrieval logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="团队详情功能尚未实现",
-    )
+    service = TeamService(db)
+    team = await service.get_team(team_id)
+
+    return TeamResponse.model_validate(team)
 
 
 @router.delete(
@@ -211,10 +256,88 @@ async def delete_team(
     db: AsyncSession = Depends(get_db_session),
 ) -> None:
     """删除Agent团队"""
-    # TODO: Implement team deletion logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="团队删除功能尚未实现",
+    service = TeamService(db)
+    await service.delete_team(team_id)
+    await db.commit()
+
+
+@router.patch(
+    "/{team_id}",
+    response_model=TeamResponse,
+    summary="更新团队配置",
+    description="""
+更新指定团队的配置信息。
+
+**可更新字段**:
+- `team_name`: 团队名称
+- `description`: 团队描述
+- `topology`: 拓扑配置（会进行验证）
+- `timeout_seconds`: 执行超时时间
+- `max_iterations`: 最大迭代次数
+- `status`: 团队状态
+
+**注意**: 更新拓扑配置时会重新进行验证。
+""",
+    responses={
+        200: {"description": "更新成功"},
+        400: {"description": "请求参数错误或拓扑验证失败"},
+        404: {"description": "团队不存在"},
+        409: {"description": "团队名称已存在"},
+    },
+)
+async def update_team(
+    team_id: uuid.UUID = Path(..., description="团队ID"),
+    team_update: TeamUpdate = ...,
+    db: AsyncSession = Depends(get_db_session),
+) -> TeamResponse:
+    """更新团队配置"""
+    service = TeamService(db)
+
+    update_data = team_update.model_dump(exclude_unset=True)
+    team = await service.update_team(team_id, update_data)
+    await db.commit()
+
+    return TeamResponse.model_validate(team)
+
+
+@router.post(
+    "/{team_id}/validate",
+    response_model=TopologyValidationResult,
+    summary="验证团队拓扑",
+    description="""
+验证指定团队的拓扑配置是否有效。
+
+**验证内容**:
+- 节点ID唯一性
+- 边引用的节点存在性
+- 循环检测
+- 孤立节点检测
+
+**返回结果**:
+- `valid`: 是否通过验证
+- `errors`: 错误信息列表（如有）
+""",
+    responses={
+        200: {"description": "验证完成"},
+        404: {"description": "团队不存在"},
+    },
+)
+async def validate_team_topology(
+    team_id: uuid.UUID = Path(..., description="团队ID"),
+    db: AsyncSession = Depends(get_db_session),
+) -> TopologyValidationResult:
+    """验证团队拓扑配置"""
+    service = TeamService(db)
+    team = await service.get_team(team_id)
+
+    validation_result = service.validate_topology(team.topology_config)
+
+    return TopologyValidationResult(
+        valid=validation_result.valid,
+        errors=[
+            TopologyValidationError(code="VALIDATION_ERROR", message=err)
+            for err in validation_result.errors
+        ],
     )
 
 
@@ -281,18 +404,41 @@ async def execute_team(
     db: AsyncSession = Depends(get_db_session),
 ) -> StreamingResponse | ExecutionResponse:
     """触发团队执行任务"""
+    exec_service = ExecutionService(db)
+
+    # Create execution record
+    execution = await exec_service.start_execution(
+        team_id=team_id,
+        input_data=execution_in.input.model_dump(),
+        timeout_seconds=execution_in.timeout_seconds,
+    )
+    await db.commit()
+
     if execution_in.stream:
-        # TODO: Implement SSE streaming response
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="流式执行功能尚未实现",
+        # SSE streaming response
+        async def event_generator():
+            async for event in exec_service.execute_stream(execution.id):
+                yield event.to_sse_format()
+            await db.commit()
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
     else:
-        # TODO: Implement non-streaming execution
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="非流式执行功能尚未实现",
-        )
+        # Non-streaming execution
+        result = await exec_service.execute_sync(execution.id)
+        await db.commit()
+
+        # Refresh execution to get latest state
+        await db.refresh(execution)
+
+        return ExecutionResponse.model_validate(execution)
 
 
 @router.post(
@@ -364,10 +510,52 @@ async def get_structured_output(
     db: AsyncSession = Depends(get_db_session),
 ) -> StructuredOutputResponse:
     """生成结构化输出"""
-    # TODO: Implement structured output generation
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="结构化输出生成功能尚未实现",
+    exec_service = ExecutionService(db)
+
+    # Get the execution
+    if output_request.execution_id:
+        execution = await exec_service.get_execution(output_request.execution_id)
+    else:
+        # Get latest execution for team
+        executions = await exec_service.list_executions(team_id=team_id, limit=1)
+        if not executions:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No executions found for this team",
+            )
+        execution = executions[0]
+
+    # Validate team matches
+    if execution.team_id != team_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Execution does not belong to the specified team",
+        )
+
+    # Generate structured output using mock for now
+    # In production, this would use LLM to extract structured data
+    raw_output = execution.output_data or {}
+    structured_output = {
+        "summary": raw_output.get("result", "No output available")[:500],
+        "execution_id": str(execution.id),
+        "status": execution.status.value,
+    }
+
+    # Validate against schema if provided
+    validation_result = {"valid": True, "errors": []}
+    if output_request.output_schema:
+        try:
+            import jsonschema
+            jsonschema.validate(structured_output, output_request.output_schema)
+        except jsonschema.ValidationError as e:
+            validation_result = {"valid": False, "errors": [str(e.message)]}
+
+    return StructuredOutputResponse(
+        team_id=team_id,
+        execution_id=execution.id,
+        structured_output=structured_output,
+        schema_validation=validation_result,
+        raw_output=raw_output if output_request.include_raw_output else None,
     )
 
 
@@ -406,11 +594,34 @@ async def list_team_executions(
     db: AsyncSession = Depends(get_db_session),
 ) -> list[ExecutionResponse]:
     """获取团队的执行历史"""
-    # TODO: Implement execution history retrieval
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="执行历史功能尚未实现",
+    from aiops_agent_executor.db.models.team import ExecutionStatus
+
+    # Verify team exists
+    team_service = TeamService(db)
+    await team_service.get_team(team_id)
+
+    exec_service = ExecutionService(db)
+
+    # Parse status filter
+    status_enum = None
+    if execution_status:
+        try:
+            status_enum = ExecutionStatus(execution_status)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status: {execution_status}",
+            )
+
+    skip = (page - 1) * size
+    executions = await exec_service.list_executions(
+        team_id=team_id,
+        status=status_enum,
+        skip=skip,
+        limit=size,
     )
+
+    return [ExecutionResponse.model_validate(ex) for ex in executions]
 
 
 @router.get(
@@ -447,8 +658,7 @@ async def get_execution(
     db: AsyncSession = Depends(get_db_session),
 ) -> ExecutionResponse:
     """获取指定执行的详细信息"""
-    # TODO: Implement execution detail retrieval
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="执行详情功能尚未实现",
-    )
+    exec_service = ExecutionService(db)
+    execution = await exec_service.get_execution(execution_id)
+
+    return ExecutionResponse.model_validate(execution)
