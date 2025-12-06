@@ -503,7 +503,7 @@ class HierarchicalTeamEngine:
         return content
 
     # =========================================================================
-    # Main Execution Entry Points
+    # Main Execution Entry Point
     # =========================================================================
 
     async def execute(
@@ -512,88 +512,8 @@ class HierarchicalTeamEngine:
         input_task: str,
         input_context: dict[str, Any] | None = None,
         execution_id: str | None = None,
-    ) -> TeamExecutionState:
-        """Execute a team with the given topology and task.
-
-        This is the main entry point for non-streaming execution.
-
-        Args:
-            topology_config: The team topology configuration
-            input_task: The task to execute
-            input_context: Optional additional context
-            execution_id: Optional execution ID
-
-        Returns:
-            Final execution state with results
-        """
-        # Initialize state
-        state = self._init_state(
-            topology_config,
-            input_task,
-            input_context or {},
-            execution_id,
-        )
-
-        # Main execution loop
-        while not state.is_complete and state.iteration_count < state.max_iterations:
-            # Get global supervisor decision
-            decision = await self._call_global_supervisor(state)
-            state.add_supervisor_decision(decision)
-
-            if decision.action == RouteAction.FINISH or not decision.should_continue:
-                state.is_complete = True
-                break
-
-            elif decision.action == RouteAction.DELEGATE and decision.next_node:
-                # Execute single node
-                node_config = state.nodes.get(decision.next_node)
-                if node_config:
-                    result = await self._execute_node(
-                        decision.next_node,
-                        node_config,
-                        decision.task_for_node or input_task,
-                        input_context or {},
-                    )
-                    state.add_node_result(decision.next_node, result)
-
-            elif decision.action == RouteAction.PARALLEL and decision.parallel_nodes:
-                # Execute multiple nodes in parallel
-                tasks = []
-                for node_id in decision.parallel_nodes:
-                    node_config = state.nodes.get(node_id)
-                    if node_config:
-                        tasks.append(self._execute_node(
-                            node_id,
-                            node_config,
-                            decision.task_for_node or input_task,
-                            input_context or {},
-                        ))
-
-                if tasks:
-                    results = await asyncio.gather(*tasks)
-                    for result in results:
-                        state.add_node_result(result["node_id"], result)
-
-        # Final synthesis
-        if state.node_results:
-            state.final_output = await self._synthesize_results(
-                input_task,
-                list(state.node_results.values()),
-                state.global_supervisor_config,
-            )
-
-        return state
-
-    async def execute_stream(
-        self,
-        topology_config: dict[str, Any],
-        input_task: str,
-        input_context: dict[str, Any] | None = None,
-        execution_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Execute with streaming events.
-
-        Yields events during execution for real-time monitoring.
+        """Execute a team with streaming events.
 
         Args:
             topology_config: The team topology configuration
@@ -602,7 +522,15 @@ class HierarchicalTeamEngine:
             execution_id: Optional execution ID
 
         Yields:
-            Event dicts with type, data, and timestamp
+            Event dicts with type, data, and timestamp:
+            - execution_start: Execution began
+            - global_supervisor_thinking: Supervisor is deciding
+            - global_supervisor_decision: Supervisor made a decision
+            - node_start: Node execution began
+            - agent_result: Agent completed
+            - node_complete: Node execution finished
+            - synthesis_start: Final synthesis began
+            - execution_complete: All done
         """
         state = self._init_state(
             topology_config,

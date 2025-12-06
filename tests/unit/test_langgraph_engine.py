@@ -410,33 +410,22 @@ This completes my decision.'''
 
     @pytest.mark.asyncio
     async def test_full_execution(self, engine, sample_topology):
-        """Test full team execution flow."""
-        state = await engine.execute(
+        """Test full team execution flow with streaming."""
+        events = []
+        final_event = None
+
+        async for event in engine.execute(
             topology_config=sample_topology,
             input_task="Diagnose why the system is slow",
             input_context={"severity": "high"},
             execution_id="full-test-001",
-        )
-
-        assert state.execution_id == "full-test-001"
-        assert state.is_complete is True or state.iteration_count >= state.max_iterations
-        assert len(state.global_supervisor_decisions) > 0
-        # At least one node should have been executed
-        assert len(state.node_results) > 0 or state.iteration_count > 0
-
-    @pytest.mark.asyncio
-    async def test_streaming_execution(self, engine, sample_topology):
-        """Test streaming execution produces events."""
-        events = []
-
-        async for event in engine.execute_stream(
-            topology_config=sample_topology,
-            input_task="Diagnose system issues",
-            input_context={},
-            execution_id="stream-test-001",
         ):
             events.append(event)
+            if event["type"] == "execution_complete":
+                final_event = event
 
+        assert final_event is not None
+        assert final_event["data"]["execution_id"] == "full-test-001"
         # Should have at least start and complete events
         event_types = [e["type"] for e in events]
         assert "execution_start" in event_types
@@ -479,14 +468,17 @@ class TestEdgeCases:
         """Test handling of empty topology."""
         engine = HierarchicalTeamEngine(llm_client=mock_llm_client, max_iterations=3)
 
-        state = await engine.execute(
+        events = []
+        async for event in engine.execute(
             topology_config={"nodes": [], "edges": []},
             input_task="Test with empty topology",
             input_context={},
-        )
+        ):
+            events.append(event)
 
         # Should complete without errors
-        assert state.is_complete is True or state.iteration_count >= 3
+        event_types = [e["type"] for e in events]
+        assert "execution_complete" in event_types
 
     @pytest.mark.asyncio
     async def test_single_node_topology(self, mock_llm_client):
@@ -529,14 +521,18 @@ class TestEdgeCases:
             "global_supervisor": {},
         }
 
-        state = await engine.execute(
+        events = []
+        async for event in engine.execute(
             topology_config=topology,
             input_task="Test single node",
             input_context={},
-        )
+        ):
+            events.append(event)
 
         # Should be able to execute the single node
-        assert state.iteration_count > 0
+        event_types = [e["type"] for e in events]
+        assert "execution_start" in event_types
+        assert "execution_complete" in event_types
 
     @pytest.mark.asyncio
     async def test_max_iterations_limit(self, mock_llm_client):
@@ -567,10 +563,14 @@ class TestEdgeCases:
             "global_supervisor": {},
         }
 
-        state = await engine.execute(
+        events = []
+        async for event in engine.execute(
             topology_config=topology,
             input_task="Test iteration limit",
             input_context={},
-        )
+        ):
+            events.append(event)
 
-        assert state.iteration_count <= 2
+        # Check iteration count from execution_complete event
+        complete_event = next(e for e in events if e["type"] == "execution_complete")
+        assert complete_event["data"]["iterations"] <= 2
