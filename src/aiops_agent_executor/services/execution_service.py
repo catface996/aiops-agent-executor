@@ -2,6 +2,9 @@
 
 Handles the orchestration of agent teams using a hierarchical supervisor pattern:
 Global Supervisor -> Node Supervisors -> Agents
+
+This module now uses the LangGraph-based execution engine for dynamic routing
+where supervisors use structured LLM output to decide which agent/node to execute.
 """
 
 import asyncio
@@ -17,7 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aiops_agent_executor.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from aiops_agent_executor.db.models.team import Execution, ExecutionStatus, Team
-from aiops_agent_executor.services.llm_client import LLMClientFactory, LLMMessage, LLMResponse
+from aiops_agent_executor.services.langgraph import HierarchicalTeamEngine
+from aiops_agent_executor.services.llm_client import LLMClientFactory, LLMMessage
 
 
 class SSEEventType(str, Enum):
@@ -80,12 +84,18 @@ class ExecutionResult:
 
 
 class ExecutionService:
-    """Service for executing Agent team tasks."""
+    """Service for executing Agent team tasks.
+
+    This service now uses the LangGraph-based HierarchicalTeamEngine for
+    dynamic supervisor routing. The engine allows supervisors to make
+    structured decisions about which agent or node to execute next.
+    """
 
     def __init__(self, db: AsyncSession) -> None:
         """Initialize the service with a database session."""
         self.db = db
         self._running_executions: dict[uuid.UUID, bool] = {}
+        self._engine = HierarchicalTeamEngine()
 
     async def start_execution(
         self,
@@ -293,17 +303,19 @@ class ExecutionService:
             await self.db.flush()
 
     async def _run_execution(self, execution: Execution) -> ExecutionResult:
-        """Run the actual execution logic.
+        """Run the actual execution logic using LangGraph engine.
 
-        This implements the three-tier architecture:
-        1. Global Supervisor coordinates overall task
-        2. Node Supervisors manage agents within each node
-        3. Agents execute specific tasks
+        This implements dynamic hierarchical routing:
+        1. Global Supervisor decides which Node to execute (via structured LLM output)
+        2. Node Supervisors decide which Agent to run (via structured LLM output)
+        3. Process continues until Global Supervisor decides to finish
+
+        The key difference from static execution is that supervisors make
+        real-time decisions about routing based on the task and intermediate results.
         """
         topology = execution.topology_snapshot
-        nodes = topology.get("nodes", [])
-        edges = topology.get("edges", [])
-        global_supervisor = topology.get("global_supervisor", {})
+        task = execution.input_data.get("task", str(execution.input_data))
+        context = execution.input_data.get("context", {})
 
         result = ExecutionResult(
             execution_id=execution.id,
@@ -312,34 +324,42 @@ class ExecutionService:
             output="",
         )
 
-        # Step 1: Global Supervisor plans the execution
-        global_plan = await self._call_global_supervisor(
-            global_supervisor,
-            execution.input_data,
-            nodes,
-            edges,
-        )
+        try:
+            # Execute using LangGraph engine with dynamic supervisor routing
+            engine_state = await self._engine.execute(
+                topology_config=topology,
+                input_task=task,
+                input_context=context,
+                execution_id=str(execution.id),
+            )
 
-        # Step 2: Execute each node based on topology
-        all_outputs = []
-        for node in nodes:
-            node_id = node.get("node_id") or node.get("id")
-            node_name = node.get("node_name") or node.get("name", node_id)
+            # Convert engine results to ExecutionResult format
+            for node_id, node_result_data in engine_state.node_results.items():
+                node_result = NodeResult(
+                    node_id=node_id,
+                    node_name=node_result_data.get("node_name", node_id),
+                    status=node_result_data.get("status", "success"),
+                    output=node_result_data.get("output", ""),
+                    agent_outputs=[
+                        {
+                            "agent_id": aid,
+                            "output": ares.get("output", ""),
+                            "status": ares.get("status", "success"),
+                        }
+                        for aid, ares in node_result_data.get("agent_results", {}).items()
+                    ],
+                    duration_ms=node_result_data.get("execution_time_ms", 0),
+                )
+                result.node_results[node_id] = node_result
 
-            node_result = await self._execute_node(node, execution.input_data, global_plan)
-            result.node_results[node_id] = node_result
-            all_outputs.append(f"[{node_name}]: {node_result.output}")
+            result.output = engine_state.final_output
+            result.status = ExecutionStatus.SUCCESS if engine_state.is_complete else ExecutionStatus.TIMEOUT
+            result.completed_at = datetime.utcnow()
 
-        # Step 3: Global Supervisor synthesizes results
-        final_output = await self._synthesize_results(
-            global_supervisor,
-            execution.input_data,
-            all_outputs,
-        )
-
-        result.output = final_output
-        result.status = ExecutionStatus.SUCCESS
-        result.completed_at = datetime.utcnow()
+        except Exception as e:
+            result.status = ExecutionStatus.FAILED
+            result.error = str(e)
+            result.completed_at = datetime.utcnow()
 
         return result
 
@@ -347,233 +367,118 @@ class ExecutionService:
         self,
         execution: Execution,
     ) -> AsyncIterator[SSEEvent]:
-        """Run execution with streaming events."""
+        """Run execution with streaming events using LangGraph engine.
+
+        This method uses the LangGraph engine's streaming capability to provide
+        real-time updates on supervisor decisions and agent executions.
+        """
         topology = execution.topology_snapshot
-        nodes = topology.get("nodes", [])
-        edges = topology.get("edges", [])
-        global_supervisor = topology.get("global_supervisor", {})
+        task = execution.input_data.get("task", str(execution.input_data))
+        context = execution.input_data.get("context", {})
 
-        # Step 1: Global Supervisor plans
-        yield SSEEvent(
-            event=SSEEventType.GLOBAL_SUPERVISOR_MESSAGE,
-            data={
-                "execution_id": str(execution.id),
-                "message": "Analyzing task and planning execution...",
-            },
-        )
+        # Use LangGraph engine's streaming execution
+        async for event in self._engine.execute_stream(
+            topology_config=topology,
+            input_task=task,
+            input_context=context,
+            execution_id=str(execution.id),
+        ):
+            event_type = event.get("type", "unknown")
+            event_data = event.get("data", {})
 
-        global_plan = await self._call_global_supervisor(
-            global_supervisor,
-            execution.input_data,
-            nodes,
-            edges,
-        )
+            # Map engine events to SSE events
+            if event_type == "execution_start":
+                yield SSEEvent(
+                    event=SSEEventType.EXECUTION_START,
+                    data={
+                        "execution_id": str(execution.id),
+                        "team_id": str(execution.team_id),
+                        "input": execution.input_data,
+                    },
+                )
 
-        yield SSEEvent(
-            event=SSEEventType.GLOBAL_SUPERVISOR_DECISION,
-            data={
-                "execution_id": str(execution.id),
-                "plan": global_plan,
-                "nodes_to_execute": [n.get("node_id") or n.get("id") for n in nodes],
-            },
-        )
+            elif event_type == "global_supervisor_thinking":
+                yield SSEEvent(
+                    event=SSEEventType.GLOBAL_SUPERVISOR_MESSAGE,
+                    data={
+                        "execution_id": str(execution.id),
+                        "message": f"Global supervisor analyzing task (iteration {event_data.get('iteration', 0)})...",
+                    },
+                )
 
-        # Step 2: Execute nodes
-        all_outputs = []
-        for node in nodes:
-            node_id = node.get("node_id") or node.get("id")
-            node_name = node.get("node_name") or node.get("name", node_id)
+            elif event_type == "global_supervisor_decision":
+                yield SSEEvent(
+                    event=SSEEventType.GLOBAL_SUPERVISOR_DECISION,
+                    data={
+                        "execution_id": str(execution.id),
+                        "action": event_data.get("action"),
+                        "next_node": event_data.get("next_node"),
+                        "parallel_nodes": event_data.get("parallel_nodes", []),
+                        "reasoning": event_data.get("reasoning", ""),
+                        "task_for_node": event_data.get("task_for_node", ""),
+                    },
+                )
 
-            # Node supervisor message
-            yield SSEEvent(
-                event=SSEEventType.NODE_SUPERVISOR_MESSAGE,
-                data={
-                    "execution_id": str(execution.id),
-                    "node_id": node_id,
-                    "message": f"Starting execution for node: {node_name}",
-                },
-            )
+            elif event_type == "node_start":
+                yield SSEEvent(
+                    event=SSEEventType.NODE_SUPERVISOR_MESSAGE,
+                    data={
+                        "execution_id": str(execution.id),
+                        "node_id": event_data.get("node_id"),
+                        "message": f"Starting node: {event_data.get('node_id')}",
+                    },
+                )
 
-            # Execute agents in the node
-            agents = node.get("agents", [])
-            agent_outputs = []
-
-            for agent in agents:
-                agent_id = agent.get("agent_id")
-                agent_output = await self._execute_agent(agent, execution.input_data)
-
+            elif event_type == "agent_result":
                 yield SSEEvent(
                     event=SSEEventType.AGENT_MESSAGE,
                     data={
                         "execution_id": str(execution.id),
-                        "node_id": node_id,
-                        "agent_id": agent_id,
-                        "message": agent_output,
+                        "node_id": event_data.get("node_id"),
+                        "agent_id": event_data.get("agent_id"),
+                        "message": event_data.get("output", ""),
+                        "status": event_data.get("status"),
                     },
                 )
 
-                agent_outputs.append({"agent_id": agent_id, "output": agent_output})
+            elif event_type == "node_complete":
+                yield SSEEvent(
+                    event=SSEEventType.NODE_COMPLETE,
+                    data={
+                        "execution_id": str(execution.id),
+                        "node_id": event_data.get("node_id"),
+                        "status": event_data.get("status", "success"),
+                        "output": event_data.get("output", "")[:500],
+                    },
+                )
 
-            # Node complete
-            node_output = "\n".join(ao["output"] for ao in agent_outputs)
-            all_outputs.append(f"[{node_name}]: {node_output}")
+            elif event_type == "synthesis_start":
+                yield SSEEvent(
+                    event=SSEEventType.GLOBAL_SUPERVISOR_MESSAGE,
+                    data={
+                        "execution_id": str(execution.id),
+                        "message": "Synthesizing results from all nodes...",
+                    },
+                )
 
-            yield SSEEvent(
-                event=SSEEventType.NODE_COMPLETE,
-                data={
-                    "execution_id": str(execution.id),
-                    "node_id": node_id,
-                    "status": "success",
-                    "output": node_output[:500],  # Truncate for SSE
-                },
-            )
+            elif event_type == "execution_complete":
+                # Update execution record with final output
+                execution.output_data = {"result": event_data.get("output", "")}
+                await self.db.flush()
 
-        # Step 3: Synthesize
-        yield SSEEvent(
-            event=SSEEventType.GLOBAL_SUPERVISOR_MESSAGE,
-            data={
-                "execution_id": str(execution.id),
-                "message": "Synthesizing results from all nodes...",
-            },
-        )
-
-        final_output = await self._synthesize_results(
-            global_supervisor,
-            execution.input_data,
-            all_outputs,
-        )
-
-        # Update execution
-        execution.output_data = {"result": final_output}
-        await self.db.flush()
-
-    async def _call_global_supervisor(
-        self,
-        supervisor_config: dict[str, Any],
-        input_data: dict[str, Any],
-        nodes: list[dict],
-        edges: list[dict],
-    ) -> str:
-        """Call the global supervisor to plan execution."""
-        provider = supervisor_config.get("model_provider", "mock")
-        model = supervisor_config.get("model_id", "mock-model")
-        system_prompt = supervisor_config.get(
-            "system_prompt",
-            "You are a global supervisor coordinating agent teams.",
-        )
-
-        client = LLMClientFactory.get_client(provider)
-
-        task = input_data.get("task", str(input_data))
-        node_info = ", ".join(
-            n.get("node_name") or n.get("name", n.get("node_id") or n.get("id"))
-            for n in nodes
-        )
-
-        messages = [
-            LLMMessage(role="system", content=system_prompt),
-            LLMMessage(
-                role="user",
-                content=f"Plan the execution for this task: {task}\n\nAvailable nodes: {node_info}",
-            ),
-        ]
-
-        response = await client.chat(messages, model)
-        return response.content
-
-    async def _execute_node(
-        self,
-        node: dict[str, Any],
-        input_data: dict[str, Any],
-        global_plan: str,
-    ) -> NodeResult:
-        """Execute a single node with its agents."""
-        import time
-
-        start_time = time.time()
-
-        node_id = node.get("node_id") or node.get("id")
-        node_name = node.get("node_name") or node.get("name", node_id)
-        agents = node.get("agents", [])
-
-        agent_outputs = []
-        combined_output = []
-
-        for agent in agents:
-            agent_output = await self._execute_agent(agent, input_data)
-            agent_outputs.append({
-                "agent_id": agent.get("agent_id"),
-                "output": agent_output,
-            })
-            combined_output.append(agent_output)
-
-        duration_ms = int((time.time() - start_time) * 1000)
-
-        return NodeResult(
-            node_id=node_id,
-            node_name=node_name,
-            status="success",
-            output="\n\n".join(combined_output),
-            agent_outputs=agent_outputs,
-            duration_ms=duration_ms,
-        )
-
-    async def _execute_agent(
-        self,
-        agent: dict[str, Any],
-        input_data: dict[str, Any],
-    ) -> str:
-        """Execute a single agent."""
-        provider = agent.get("model_provider", "mock")
-        model = agent.get("model_id", "mock-model")
-        system_prompt = agent.get("system_prompt", "You are a helpful agent.")
-        temperature = agent.get("temperature", 0.7)
-
-        client = LLMClientFactory.get_client(provider)
-
-        task = input_data.get("task", str(input_data))
-        context = input_data.get("context", {})
-
-        messages = [
-            LLMMessage(role="system", content=system_prompt),
-            LLMMessage(
-                role="user",
-                content=f"Task: {task}\n\nContext: {context}",
-            ),
-        ]
-
-        response = await client.chat(messages, model, temperature=temperature)
-        return response.content
-
-    async def _synthesize_results(
-        self,
-        supervisor_config: dict[str, Any],
-        input_data: dict[str, Any],
-        node_outputs: list[str],
-    ) -> str:
-        """Synthesize results from all nodes into final output."""
-        provider = supervisor_config.get("model_provider", "mock")
-        model = supervisor_config.get("model_id", "mock-model")
-        system_prompt = supervisor_config.get(
-            "system_prompt",
-            "You are synthesizing results from multiple agents.",
-        )
-
-        client = LLMClientFactory.get_client(provider)
-
-        task = input_data.get("task", str(input_data))
-        results_text = "\n\n".join(node_outputs)
-
-        messages = [
-            LLMMessage(role="system", content=system_prompt),
-            LLMMessage(
-                role="user",
-                content=f"Original task: {task}\n\nResults from agents:\n{results_text}\n\nPlease synthesize these results into a final summary.",
-            ),
-        ]
-
-        response = await client.chat(messages, model)
-        return response.content
+    # =========================================================================
+    # NOTE: The following methods have been moved to the LangGraph engine:
+    #   - _call_global_supervisor -> HierarchicalTeamEngine._call_global_supervisor
+    #   - _execute_node -> HierarchicalTeamEngine._execute_node
+    #   - _execute_agent -> HierarchicalTeamEngine._execute_agent
+    #   - _synthesize_results -> HierarchicalTeamEngine._synthesize_results
+    #
+    # The LangGraph engine provides:
+    #   1. Dynamic supervisor routing via structured LLM output
+    #   2. Node-level supervisor decisions for agent selection
+    #   3. Support for parallel execution of nodes/agents
+    #   4. Iterative execution until supervisors decide to finish
+    # =========================================================================
 
     async def get_execution(self, execution_id: uuid.UUID) -> Execution:
         """Get an execution by ID.

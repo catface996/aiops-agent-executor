@@ -23,6 +23,7 @@ class ProviderType(str, enum.Enum):
     BAIDU_QIANFAN = "baidu_qianfan"
     OLLAMA = "ollama"
     VLLM = "vllm"
+    OPENROUTER = "openrouter"  # OpenRouter API aggregator
 
 
 class ModelType(str, enum.Enum):

@@ -1,16 +1,28 @@
-"""LLM Client for invoking language models.
+"""LLM Client for invoking language models using LangChain.
 
-This module provides a unified interface for calling different LLM providers.
-Currently uses mock responses - will be replaced with real API calls when keys are provided.
+This module provides a unified interface for calling different LLM providers
+using LangChain's ChatModel implementations. Supports OpenAI, Anthropic,
+and OpenRouter (via OpenAI-compatible API).
 """
 
-import asyncio
+import logging
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
 from typing import Any
 
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, BaseMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_openai import ChatOpenAI
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Data Classes
+# =============================================================================
 
 @dataclass
 class LLMMessage:
@@ -18,19 +30,6 @@ class LLMMessage:
 
     role: str  # "system", "user", "assistant"
     content: str
-
-
-@dataclass
-class LLMResponse:
-    """Response from an LLM call."""
-
-    content: str
-    model: str
-    provider: str
-    usage: dict[str, int] = field(default_factory=dict)
-    finish_reason: str = "stop"
-    response_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -42,195 +41,209 @@ class ToolCall:
     arguments: dict[str, Any]
 
 
-@dataclass
-class LLMResponseWithTools:
-    """Response from an LLM call that may include tool calls."""
-
-    content: str | None
-    tool_calls: list[ToolCall] = field(default_factory=list)
-    model: str = ""
-    provider: str = ""
-    usage: dict[str, int] = field(default_factory=dict)
-    finish_reason: str = "stop"
-    response_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-
+# =============================================================================
+# Base Client
+# =============================================================================
 
 class BaseLLMClient(ABC):
     """Abstract base class for LLM clients."""
 
     @abstractmethod
-    async def chat(
+    def stream(
         self,
         messages: list[LLMMessage],
         model: str,
         temperature: float = 0.7,
         max_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
-    ) -> LLMResponse | LLMResponseWithTools:
-        """Send a chat completion request."""
-        pass
-
-    @abstractmethod
-    async def stream_chat(
-        self,
-        messages: list[LLMMessage],
-        model: str,
-        temperature: float = 0.7,
-        max_tokens: int | None = None,
-    ):
-        """Stream a chat completion request. Yields chunks of text."""
+    ) -> AsyncIterator[str | ToolCall]:
+        """Stream a chat completion. Yields text chunks or tool calls."""
         pass
 
 
-class MockLLMClient(BaseLLMClient):
-    """Mock LLM client for testing and development.
+# =============================================================================
+# LangChain-based Clients
+# =============================================================================
 
-    Returns predefined responses based on the system prompt and user message.
-    Will be replaced with real API calls when LLM keys are provided.
+class LangChainClient(BaseLLMClient):
+    """LLM client using LangChain's ChatModel.
+
+    Base class for all LangChain-based clients.
+    Subclasses implement _create_chat_model to return the appropriate model.
     """
 
-    # Mock response templates based on agent roles
-    MOCK_RESPONSES = {
-        "analyzer": "Based on my analysis, I found the following issues:\n1. High CPU usage on server-01\n2. Memory leak detected in the application\n3. Database connection timeout errors\n\nRecommendation: Scale up resources and restart the affected services.",
-        "coordinator": "I will coordinate the following tasks:\n1. Assign log analysis to Agent-1\n2. Assign metrics collection to Agent-2\n3. Aggregate results and generate report\n\nProceeding with task distribution.",
-        "db-analyzer": "Database analysis complete:\n- Query performance: 85% within SLA\n- Slow queries identified: 3\n- Index recommendations: Add index on users.email\n- Connection pool status: Healthy",
-        "log-analyzer": "Log analysis results:\n- Total logs processed: 10,000\n- Errors found: 15\n- Warnings found: 45\n- Critical patterns: Connection refused errors at 14:30",
-        "default": "Task completed successfully. I have processed the request and generated the following output based on the provided context.",
-    }
+    def __init__(self, provider: str = "langchain"):
+        self._provider = provider
 
-    def __init__(self, delay_seconds: float = 0.5):
-        """Initialize mock client with optional delay to simulate API latency.
+    def _convert_messages(self, messages: list[LLMMessage]) -> list[BaseMessage]:
+        """Convert LLMMessage to LangChain message format."""
+        result = []
+        for msg in messages:
+            if msg.role == "system":
+                result.append(SystemMessage(content=msg.content))
+            elif msg.role == "user":
+                result.append(HumanMessage(content=msg.content))
+            elif msg.role == "assistant":
+                result.append(AIMessage(content=msg.content))
+            else:
+                result.append(HumanMessage(content=msg.content))
+        return result
 
-        Args:
-            delay_seconds: Simulated API response delay
-        """
-        self.delay_seconds = delay_seconds
-        self.call_count = 0
+    def _create_chat_model(
+        self,
+        model: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> BaseChatModel:
+        """Create a LangChain ChatModel. Override in subclasses."""
+        raise NotImplementedError("Subclasses must implement _create_chat_model")
 
-    async def chat(
+    async def stream(
         self,
         messages: list[LLMMessage],
         model: str,
         temperature: float = 0.7,
         max_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
-    ) -> LLMResponse:
-        """Return a mock chat response."""
-        self.call_count += 1
+    ) -> AsyncIterator[str | ToolCall]:
+        """Stream a chat completion.
 
-        # Simulate API latency
-        await asyncio.sleep(self.delay_seconds)
+        Yields:
+            str: Text content chunks
+            ToolCall: Tool call when LLM requests a tool
+        """
+        chat_model = self._create_chat_model(model, temperature, max_tokens)
+        langchain_messages = self._convert_messages(messages)
 
-        # Extract role from system prompt
-        role = self._extract_role(messages)
+        if tools:
+            chat_model = chat_model.bind_tools(tools)
 
-        # Generate response based on role
-        response_content = self._generate_response(role, messages)
+        async for chunk in chat_model.astream(langchain_messages):
+            if hasattr(chunk, "content") and chunk.content:
+                yield chunk.content
 
-        return LLMResponse(
-            content=response_content,
-            model=model,
-            provider="mock",
-            usage={
-                "prompt_tokens": sum(len(m.content.split()) for m in messages) * 2,
-                "completion_tokens": len(response_content.split()) * 2,
-                "total_tokens": sum(len(m.content.split()) for m in messages) * 2
-                + len(response_content.split()) * 2,
-            },
-            finish_reason="stop",
-        )
+            if hasattr(chunk, "tool_calls") and chunk.tool_calls:
+                for tc in chunk.tool_calls:
+                    yield ToolCall(
+                        tool_id=tc.get("id", str(uuid.uuid4())),
+                        tool_name=tc.get("name", ""),
+                        arguments=tc.get("args", {}),
+                    )
 
-    async def stream_chat(
+    async def complete(
         self,
         messages: list[LLMMessage],
         model: str,
         temperature: float = 0.7,
         max_tokens: int | None = None,
-    ):
-        """Stream a mock chat response, yielding chunks of text."""
-        self.call_count += 1
+        tools: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, list[ToolCall]]:
+        """Get complete response (collects all stream chunks).
 
-        # Extract role and generate full response
-        role = self._extract_role(messages)
-        full_response = self._generate_response(role, messages)
+        Returns:
+            Tuple of (content, tool_calls)
+        """
+        content_parts = []
+        tool_calls = []
 
-        # Simulate streaming by yielding words
-        words = full_response.split()
-        for i, word in enumerate(words):
-            await asyncio.sleep(self.delay_seconds / len(words))
-            yield word + (" " if i < len(words) - 1 else "")
+        async for chunk in self.stream(messages, model, temperature, max_tokens, tools):
+            if isinstance(chunk, str):
+                content_parts.append(chunk)
+            elif isinstance(chunk, ToolCall):
+                tool_calls.append(chunk)
 
-    def _extract_role(self, messages: list[LLMMessage]) -> str:
-        """Extract the agent role from system prompt."""
-        for msg in messages:
-            if msg.role == "system":
-                content_lower = msg.content.lower()
-                for role in self.MOCK_RESPONSES:
-                    if role in content_lower:
-                        return role
-        return "default"
+        return "".join(content_parts), tool_calls
 
-    def _generate_response(self, role: str, messages: list[LLMMessage]) -> str:
-        """Generate a mock response based on role and context."""
-        base_response = self.MOCK_RESPONSES.get(role, self.MOCK_RESPONSES["default"])
 
-        # Add context from user message if available
-        user_messages = [m for m in messages if m.role == "user"]
-        if user_messages:
-            last_user_msg = user_messages[-1].content
-            if "error" in last_user_msg.lower():
-                base_response = f"Investigating the error: {last_user_msg[:100]}...\n\n{base_response}"
+class OpenAICompatibleClient(LangChainClient):
+    """Client for OpenAI-compatible APIs.
 
-        return base_response
+    Works with: OpenAI, OpenRouter, Azure OpenAI, vLLM, Ollama, etc.
+    """
+
+    def __init__(self, api_key: str, base_url: str | None = None):
+        super().__init__(provider="openai")
+        self._api_key = api_key
+        self._base_url = base_url
+
+    def _create_chat_model(
+        self,
+        model: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> BaseChatModel:
+        kwargs = {
+            "model": model,
+            "temperature": temperature,
+            "api_key": self._api_key,
+        }
+        if self._base_url:
+            kwargs["base_url"] = self._base_url
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
+
+        return ChatOpenAI(**kwargs)
+
+
+class AnthropicClient(LangChainClient):
+    """Client for Anthropic API."""
+
+    def __init__(self, api_key: str):
+        super().__init__(provider="anthropic")
+        self._api_key = api_key
+
+    def _create_chat_model(
+        self,
+        model: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> BaseChatModel:
+        kwargs = {
+            "model": model,
+            "temperature": temperature,
+            "api_key": self._api_key,
+        }
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
+
+        return ChatAnthropic(**kwargs)
+
+
+# =============================================================================
+# Client Factory
+# =============================================================================
+
+# Default base URLs for known providers
+PROVIDER_BASE_URLS = {
+    "openrouter": "https://openrouter.ai/api/v1",
+    "openai": "https://api.openai.com/v1",
+}
 
 
 class LLMClientFactory:
-    """Factory for creating LLM clients based on provider."""
+    """Factory for creating LLM clients."""
 
-    _clients: dict[str, BaseLLMClient] = {}
-    _use_mock: bool = True  # Set to False when real API keys are available
-
-    @classmethod
-    def get_client(cls, provider: str, **kwargs) -> BaseLLMClient:
-        """Get or create an LLM client for the specified provider.
+    @staticmethod
+    def create(
+        provider: str,
+        api_key: str,
+        base_url: str | None = None,
+    ) -> BaseLLMClient:
+        """Create an LLM client.
 
         Args:
-            provider: The LLM provider name (e.g., "openai", "anthropic", "bedrock")
-            **kwargs: Additional configuration for the client
+            provider: Provider type (e.g., "openai", "anthropic", "openrouter")
+            api_key: API key
+            base_url: Optional base URL (overrides default)
 
         Returns:
-            An LLM client instance
+            LLM client instance
         """
-        if cls._use_mock:
-            # Return mock client for all providers during development
-            if "mock" not in cls._clients:
-                cls._clients["mock"] = MockLLMClient()
-            return cls._clients["mock"]
+        provider = provider.lower()
 
-        # TODO: Implement real clients when API keys are available
-        # if provider == "openai":
-        #     return OpenAIClient(**kwargs)
-        # elif provider == "anthropic":
-        #     return AnthropicClient(**kwargs)
-        # elif provider == "bedrock":
-        #     return BedrockClient(**kwargs)
-
-        # Default to mock for unknown providers
-        if "mock" not in cls._clients:
-            cls._clients["mock"] = MockLLMClient()
-        return cls._clients["mock"]
-
-    @classmethod
-    def set_use_mock(cls, use_mock: bool) -> None:
-        """Enable or disable mock mode.
-
-        Args:
-            use_mock: If True, always return mock clients
-        """
-        cls._use_mock = use_mock
-
-    @classmethod
-    def clear_cache(cls) -> None:
-        """Clear cached clients."""
-        cls._clients.clear()
+        if provider == "anthropic":
+            return AnthropicClient(api_key=api_key)
+        else:
+            # OpenAI-compatible: openai, openrouter, azure, vllm, ollama, etc.
+            url = base_url or PROVIDER_BASE_URLS.get(provider)
+            return OpenAICompatibleClient(api_key=api_key, base_url=url)
