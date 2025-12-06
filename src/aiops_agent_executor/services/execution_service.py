@@ -325,35 +325,45 @@ class ExecutionService:
         )
 
         try:
-            # Execute using LangGraph engine with dynamic supervisor routing
-            engine_state = await self._engine.execute(
+            # Execute using LangGraph engine's streaming execution and collect results
+            final_output = ""
+            node_results_data: dict[str, dict[str, Any]] = {}
+
+            async for event in self._engine.execute(
                 topology_config=topology,
                 input_task=task,
                 input_context=context,
                 execution_id=str(execution.id),
-            )
+            ):
+                event_type = event.get("type", "")
+                event_data = event.get("data", {})
 
-            # Convert engine results to ExecutionResult format
-            for node_id, node_result_data in engine_state.node_results.items():
+                if event_type == "node_complete":
+                    node_id = event_data.get("node_id", "")
+                    if node_id:
+                        node_results_data[node_id] = event_data
+
+                elif event_type == "execution_complete":
+                    final_output = event_data.get("output", "")
+                    result.status = (
+                        ExecutionStatus.SUCCESS
+                        if event_data.get("status") == "success"
+                        else ExecutionStatus.TIMEOUT
+                    )
+
+            # Convert collected node results to ExecutionResult format
+            for node_id, node_data in node_results_data.items():
                 node_result = NodeResult(
                     node_id=node_id,
-                    node_name=node_result_data.get("node_name", node_id),
-                    status=node_result_data.get("status", "success"),
-                    output=node_result_data.get("output", ""),
-                    agent_outputs=[
-                        {
-                            "agent_id": aid,
-                            "output": ares.get("output", ""),
-                            "status": ares.get("status", "success"),
-                        }
-                        for aid, ares in node_result_data.get("agent_results", {}).items()
-                    ],
-                    duration_ms=node_result_data.get("execution_time_ms", 0),
+                    node_name=node_data.get("node_name", node_id),
+                    status=node_data.get("status", "success"),
+                    output=node_data.get("output", ""),
+                    agent_outputs=[],
+                    duration_ms=node_data.get("execution_time_ms", 0),
                 )
                 result.node_results[node_id] = node_result
 
-            result.output = engine_state.final_output
-            result.status = ExecutionStatus.SUCCESS if engine_state.is_complete else ExecutionStatus.TIMEOUT
+            result.output = final_output
             result.completed_at = datetime.utcnow()
 
         except Exception as e:
@@ -377,7 +387,7 @@ class ExecutionService:
         context = execution.input_data.get("context", {})
 
         # Use LangGraph engine's streaming execution
-        async for event in self._engine.execute_stream(
+        async for event in self._engine.execute(
             topology_config=topology,
             input_task=task,
             input_context=context,

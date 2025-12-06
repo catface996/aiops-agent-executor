@@ -80,9 +80,6 @@ class Provider(Base, UUIDMixin, TimestampMixin):
     models: Mapped[list["Model"]] = relationship(
         "Model", back_populates="provider", cascade="all, delete-orphan"
     )
-    agents: Mapped[list["Agent"]] = relationship(
-        "Agent", back_populates="provider"
-    )
 
 
 class Endpoint(Base, UUIDMixin, TimestampMixin):
@@ -161,7 +158,3 @@ class Model(Base, UUIDMixin, TimestampMixin):
 
     # Relationships
     provider: Mapped["Provider"] = relationship("Provider", back_populates="models")
-
-
-# Import for type hints (avoid circular imports)
-from aiops_agent_executor.db.models.agent import Agent  # noqa: E402, F401

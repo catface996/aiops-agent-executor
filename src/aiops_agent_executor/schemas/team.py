@@ -11,12 +11,15 @@ from aiops_agent_executor.db.models import ExecutionStatus, TeamStatus
 
 # ============== Agent Configuration ==============
 class AgentConfig(BaseModel):
-    """Configuration for a single agent."""
+    """Configuration for a single agent.
+
+    Note: model_provider is not specified here. The provider is determined
+    at execution time from the database configuration via LLMService.
+    """
 
     agent_id: str = Field(..., max_length=100)
     agent_name: str = Field(..., max_length=200)
-    model_provider: str = Field(..., description="Reference to provider name")
-    model_id: str = Field(..., description="Reference to model ID")
+    model_id: str = Field(..., description="Model identifier (e.g., 'gpt-4', 'claude-3-opus')")
     system_prompt: str
     user_prompt_template: str | None = None
     tools: list[str] = Field(default_factory=list)
@@ -25,19 +28,25 @@ class AgentConfig(BaseModel):
 
 
 class SupervisorConfig(BaseModel):
-    """Configuration for a node supervisor."""
+    """Configuration for a node supervisor.
 
-    model_provider: str
-    model_id: str
+    Note: model_provider is not specified here. The provider is determined
+    at execution time from the database configuration via LLMService.
+    """
+
+    model_id: str = Field(..., description="Model identifier for supervisor")
     system_prompt: str
     coordination_strategy: Literal["round_robin", "priority", "adaptive"] = "round_robin"
 
 
 class GlobalSupervisorConfig(BaseModel):
-    """Configuration for the global supervisor."""
+    """Configuration for the global supervisor.
 
-    model_provider: str
-    model_id: str
+    Note: model_provider is not specified here. The provider is determined
+    at execution time from the database configuration via LLMService.
+    """
+
+    model_id: str = Field(..., description="Model identifier for global supervisor")
     system_prompt: str
     coordination_strategy: Literal["hierarchical", "parallel", "sequential"] = "hierarchical"
 

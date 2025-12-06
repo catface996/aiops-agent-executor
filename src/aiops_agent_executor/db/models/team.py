@@ -99,7 +99,3 @@ class ExecutionLog(Base, UUIDMixin):
 
     # Relationships
     execution: Mapped["Execution"] = relationship("Execution", back_populates="logs")
-
-
-# Import for type hints (avoid circular imports)
-from aiops_agent_executor.db.models.agent import Node  # noqa: E402, F401

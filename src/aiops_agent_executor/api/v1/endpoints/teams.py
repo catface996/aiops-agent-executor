@@ -81,13 +81,11 @@ router = APIRouter(prefix="/teams", tags=["teams"])
             "agents": [{
                 "agent_id": "log-analyzer",
                 "agent_name": "日志分析Agent",
-                "model_provider": "openai",
                 "model_id": "gpt-4",
                 "system_prompt": "你是一个日志分析专家...",
                 "tools": ["search_logs", "parse_error"]
             }],
             "supervisor_config": {
-                "model_provider": "openai",
                 "model_id": "gpt-4",
                 "system_prompt": "协调数据库相关的分析任务",
                 "coordination_strategy": "adaptive"
@@ -99,7 +97,6 @@ router = APIRouter(prefix="/teams", tags=["teams"])
             "relation_type": "calls"
         }],
         "global_supervisor": {
-            "model_provider": "openai",
             "model_id": "gpt-4",
             "system_prompt": "协调所有节点完成故障诊断",
             "coordination_strategy": "hierarchical"
@@ -110,16 +107,18 @@ router = APIRouter(prefix="/teams", tags=["teams"])
 }
 ```
 
+**说明**:
+- `model_id`: 指定使用的模型（如 gpt-4, claude-3-opus 等）
+- Provider 和 API 密钥在执行时从系统数据库配置中自动获取
+
 **验证规则**:
-- 所有model_provider和model_id必须在系统中已配置
 - 节点ID必须唯一
 - Edge引用的节点必须存在
 - 单个Team最多100个节点，单节点最多20个Agent
 """,
     responses={
         201: {"description": "团队创建成功"},
-        400: {"description": "请求参数错误或验证失败"},
-        404: {"description": "引用的供应商或模型不存在"},
+        400: {"description": "请求参数错误或拓扑验证失败"},
     },
 )
 async def create_team(
