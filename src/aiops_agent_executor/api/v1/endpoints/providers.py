@@ -5,7 +5,7 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aiops_agent_executor.db.session import get_db_session
@@ -14,8 +14,14 @@ from aiops_agent_executor.schemas import (
     ProviderResponse,
     ProviderUpdate,
 )
+from aiops_agent_executor.services.provider_service import ProviderService
 
 router = APIRouter(prefix="/providers", tags=["providers"])
+
+
+def get_provider_service(db: AsyncSession = Depends(get_db_session)) -> ProviderService:
+    """Dependency to get provider service instance."""
+    return ProviderService(db)
 
 
 @router.post(
@@ -56,14 +62,11 @@ router = APIRouter(prefix="/providers", tags=["providers"])
 )
 async def create_provider(
     provider_in: ProviderCreate,
-    db: AsyncSession = Depends(get_db_session),
+    service: ProviderService = Depends(get_provider_service),
 ) -> ProviderResponse:
     """创建新的LLM供应商配置"""
-    # TODO: Implement provider creation logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="供应商创建功能尚未实现",
-    )
+    provider = await service.create_provider(provider_in)
+    return ProviderResponse.model_validate(provider)
 
 
 @router.get(
@@ -92,14 +95,11 @@ async def list_providers(
     skip: int = Query(0, ge=0, description="跳过的记录数"),
     limit: int = Query(20, ge=1, le=100, description="返回的最大记录数"),
     is_active: bool | None = Query(None, description="筛选启用状态：true=仅启用, false=仅禁用, 不传=全部"),
-    db: AsyncSession = Depends(get_db_session),
+    service: ProviderService = Depends(get_provider_service),
 ) -> list[ProviderResponse]:
     """获取供应商列表"""
-    # TODO: Implement provider listing logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="供应商列表功能尚未实现",
-    )
+    providers = await service.list_providers(skip=skip, limit=limit, is_active=is_active)
+    return [ProviderResponse.model_validate(p) for p in providers]
 
 
 @router.get(
@@ -123,14 +123,11 @@ async def list_providers(
 )
 async def get_provider(
     provider_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db_session),
+    service: ProviderService = Depends(get_provider_service),
 ) -> ProviderResponse:
     """获取指定供应商的详细信息"""
-    # TODO: Implement provider retrieval logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="供应商详情功能尚未实现",
-    )
+    provider = await service.get_provider(provider_id)
+    return ProviderResponse.model_validate(provider)
 
 
 @router.put(
@@ -169,14 +166,11 @@ async def get_provider(
 async def update_provider(
     provider_id: uuid.UUID,
     provider_in: ProviderUpdate,
-    db: AsyncSession = Depends(get_db_session),
+    service: ProviderService = Depends(get_provider_service),
 ) -> ProviderResponse:
     """更新供应商配置"""
-    # TODO: Implement provider update logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="供应商更新功能尚未实现",
-    )
+    provider = await service.update_provider(provider_id, provider_in)
+    return ProviderResponse.model_validate(provider)
 
 
 @router.delete(
@@ -184,12 +178,11 @@ async def update_provider(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="删除供应商",
     description="""
-删除指定的供应商配置（软删除）。
+删除指定的供应商配置。
 
 **删除行为**:
-- 执行软删除，数据不会物理删除
-- 关联的接入点、密钥、模型配置会一并标记删除
-- 删除后可通过数据库恢复
+- 执行物理删除，关联的接入点、密钥、模型配置会一并级联删除
+- 删除后不可恢复
 
 **前置检查**:
 - 如有正在运行的Agent团队使用此供应商，删除会被拒绝
@@ -205,14 +198,10 @@ async def update_provider(
 )
 async def delete_provider(
     provider_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db_session),
+    service: ProviderService = Depends(get_provider_service),
 ) -> None:
-    """删除供应商（软删除）"""
-    # TODO: Implement provider deletion logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="供应商删除功能尚未实现",
-    )
+    """删除供应商"""
+    await service.delete_provider(provider_id)
 
 
 @router.patch(
@@ -245,11 +234,8 @@ PATCH /api/v1/providers/{id}/status?is_active=false
 async def update_provider_status(
     provider_id: uuid.UUID,
     is_active: bool = Query(..., description="目标状态：true=启用, false=禁用"),
-    db: AsyncSession = Depends(get_db_session),
+    service: ProviderService = Depends(get_provider_service),
 ) -> ProviderResponse:
     """更新供应商启用状态"""
-    # TODO: Implement status update logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="供应商状态更新功能尚未实现",
-    )
+    provider = await service.update_provider_status(provider_id, is_active)
+    return ProviderResponse.model_validate(provider)

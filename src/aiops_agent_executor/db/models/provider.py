@@ -42,6 +42,23 @@ class ModelStatus(str, enum.Enum):
     DEPRECATED = "deprecated"
 
 
+class HealthStatus(str, enum.Enum):
+    """Endpoint health status."""
+
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    UNHEALTHY = "unhealthy"
+
+
+class ValidationStatus(str, enum.Enum):
+    """Credential validation status."""
+
+    VALID = "valid"
+    INVALID = "invalid"
+    EXPIRED = "expired"
+    QUOTA_EXCEEDED = "quota_exceeded"
+
+
 class Provider(Base, UUIDMixin, TimestampMixin):
     """LLM Provider entity."""
 
@@ -82,6 +99,10 @@ class Endpoint(Base, UUIDMixin, TimestampMixin):
     retry_interval: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    health_status: Mapped[HealthStatus] = mapped_column(
+        Enum(HealthStatus), default=HealthStatus.HEALTHY, nullable=False
+    )
+    last_health_check: Mapped[datetime | None] = mapped_column(nullable=True)
 
     # Relationships
     provider: Mapped["Provider"] = relationship("Provider", back_populates="endpoints")
@@ -98,9 +119,16 @@ class Credential(Base, UUIDMixin, TimestampMixin):
     alias: Mapped[str] = mapped_column(String(100), nullable=False)
     api_key_encrypted: Mapped[str] = mapped_column(String(1000), nullable=False)
     secret_key_encrypted: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    api_key_hint: Mapped[str] = mapped_column(String(20), nullable=False)
+    has_secret_key: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
     quota_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quota_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_validated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    validation_status: Mapped[ValidationStatus | None] = mapped_column(
+        Enum(ValidationStatus), nullable=True
+    )
 
     # Relationships
     provider: Mapped["Provider"] = relationship("Provider", back_populates="credentials")

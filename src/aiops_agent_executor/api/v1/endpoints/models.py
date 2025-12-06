@@ -6,17 +6,24 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, Path, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aiops_agent_executor.db.models import ModelStatus, ModelType
 from aiops_agent_executor.db.session import get_db_session
 from aiops_agent_executor.schemas import (
     ModelCreate,
     ModelResponse,
     ModelUpdate,
 )
+from aiops_agent_executor.services.model_service import ModelService
 
 router = APIRouter(tags=["models"])
+
+
+def get_model_service(db: AsyncSession = Depends(get_db_session)) -> ModelService:
+    """Dependency to get model service instance."""
+    return ModelService(db)
 
 
 @router.post(
@@ -60,14 +67,56 @@ router = APIRouter(tags=["models"])
 )
 async def sync_provider_models(
     provider_id: uuid.UUID = Path(..., description="供应商ID"),
-    db: AsyncSession = Depends(get_db_session),
+    service: ModelService = Depends(get_model_service),
 ) -> list[ModelResponse]:
     """从供应商同步可用模型列表"""
-    # TODO: Implement model sync logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="模型同步功能尚未实现",
-    )
+    models = await service.sync_models(provider_id)
+    return [ModelResponse.model_validate(m) for m in models]
+
+
+@router.post(
+    "/providers/{provider_id}/models",
+    response_model=ModelResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="手动添加模型",
+    description="""
+为供应商手动添加模型配置。
+
+**使用场景**:
+- 添加供应商API中未列出的模型
+- 添加自托管模型（如Ollama、vLLM）
+- 添加私有部署的模型
+
+**示例请求**:
+```json
+{
+    "model_id": "llama3-70b",
+    "name": "Llama 3 70B",
+    "type": "chat",
+    "context_window": 8192,
+    "max_output_tokens": 4096,
+    "capabilities": {
+        "text_generation": true,
+        "chat": true,
+        "streaming": true
+    }
+}
+```
+""",
+    responses={
+        201: {"description": "模型创建成功"},
+        400: {"description": "模型ID已存在"},
+        404: {"description": "供应商不存在"},
+    },
+)
+async def create_model(
+    provider_id: uuid.UUID = Path(..., description="供应商ID"),
+    model_in: ModelCreate = ...,
+    service: ModelService = Depends(get_model_service),
+) -> ModelResponse:
+    """手动为供应商添加模型"""
+    model = await service.create_model(provider_id, model_in)
+    return ModelResponse.model_validate(model)
 
 
 @router.get(
@@ -102,17 +151,27 @@ async def list_models(
     skip: int = Query(0, ge=0, description="跳过的记录数"),
     limit: int = Query(50, ge=1, le=200, description="返回的最大记录数"),
     provider_id: uuid.UUID | None = Query(None, description="按供应商ID筛选"),
-    model_type: str | None = Query(None, alias="type", description="按模型类型筛选: chat/completion/embedding/vision"),
-    capability: str | None = Query(None, description="按能力筛选: function_calling/vision/streaming等"),
-    model_status: str | None = Query(None, alias="status", description="按状态筛选: available/maintenance/deprecated"),
-    db: AsyncSession = Depends(get_db_session),
+    model_type: ModelType | None = Query(
+        None, alias="type", description="按模型类型筛选: chat/completion/embedding/vision"
+    ),
+    capability: str | None = Query(
+        None, description="按能力筛选: function_calling/vision/streaming等"
+    ),
+    model_status: ModelStatus | None = Query(
+        None, alias="status", description="按状态筛选: available/maintenance/deprecated"
+    ),
+    service: ModelService = Depends(get_model_service),
 ) -> list[ModelResponse]:
     """获取所有模型列表"""
-    # TODO: Implement model listing logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="模型列表功能尚未实现",
+    models = await service.list_models(
+        provider_id=provider_id,
+        model_type=model_type,
+        capability=capability,
+        status=model_status,
+        skip=skip,
+        limit=limit,
     )
+    return [ModelResponse.model_validate(m) for m in models]
 
 
 @router.get(
@@ -150,14 +209,11 @@ async def list_models(
 )
 async def get_model(
     model_id: uuid.UUID = Path(..., description="模型ID"),
-    db: AsyncSession = Depends(get_db_session),
+    service: ModelService = Depends(get_model_service),
 ) -> ModelResponse:
     """获取指定模型的详细信息"""
-    # TODO: Implement model retrieval logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="模型详情功能尚未实现",
-    )
+    model = await service.get_model(model_id)
+    return ModelResponse.model_validate(model)
 
 
 @router.put(
@@ -193,14 +249,11 @@ async def get_model(
 async def update_model(
     model_id: uuid.UUID = Path(..., description="模型ID"),
     model_in: ModelUpdate = ...,
-    db: AsyncSession = Depends(get_db_session),
+    service: ModelService = Depends(get_model_service),
 ) -> ModelResponse:
     """更新模型配置"""
-    # TODO: Implement model update logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="模型更新功能尚未实现",
-    )
+    model = await service.update_model(model_id, model_in)
+    return ModelResponse.model_validate(model)
 
 
 @router.get(
@@ -236,11 +289,8 @@ async def update_model(
 )
 async def get_models_by_capability(
     capability: str = Path(..., description="能力标签名称"),
-    db: AsyncSession = Depends(get_db_session),
+    service: ModelService = Depends(get_model_service),
 ) -> list[ModelResponse]:
     """按能力查询模型"""
-    # TODO: Implement capability-based model query
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="按能力查询模型功能尚未实现",
-    )
+    models = await service.get_models_by_capability(capability)
+    return [ModelResponse.model_validate(m) for m in models]

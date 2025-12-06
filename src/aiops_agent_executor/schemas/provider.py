@@ -6,7 +6,13 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from aiops_agent_executor.db.models import ModelStatus, ModelType, ProviderType
+from aiops_agent_executor.db.models import (
+    HealthStatus,
+    ModelStatus,
+    ModelType,
+    ProviderType,
+    ValidationStatus,
+)
 
 
 # ============== Provider Schemas ==============
@@ -87,8 +93,19 @@ class EndpointResponse(EndpointBase):
     id: uuid.UUID
     provider_id: uuid.UUID
     is_active: bool
+    health_status: HealthStatus = HealthStatus.HEALTHY
+    last_health_check: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class HealthCheckResult(BaseModel):
+    """Schema for health check result."""
+
+    status: HealthStatus
+    latency_ms: int
+    checked_at: datetime
+    details: dict | None = None
 
 
 # ============== Credential Schemas ==============
@@ -118,17 +135,33 @@ class CredentialUpdate(BaseModel):
     is_active: bool | None = None
 
 
-class CredentialResponse(CredentialBase):
+class CredentialResponse(BaseModel):
     """Schema for credential response (with masked keys)."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     provider_id: uuid.UUID
-    api_key_masked: str = Field(..., description="Masked API key")
+    alias: str
+    api_key_hint: str = Field(..., description="Masked API key (****xxxx)")
+    has_secret_key: bool
+    expires_at: datetime | None = None
+    quota_limit: int | None = None
+    quota_used: int = 0
     is_active: bool
+    last_validated_at: datetime | None = None
+    validation_status: ValidationStatus | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ValidationResult(BaseModel):
+    """Schema for credential validation result."""
+
+    valid: bool
+    validated_at: datetime
+    details: dict | None = None
+    error: dict | None = None
 
 
 # ============== Model Schemas ==============

@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from aiops_agent_executor.api.v1.exception_handlers import register_exception_handlers
 from aiops_agent_executor.api.v1.router import api_router
 from aiops_agent_executor.core.config import get_settings
 from aiops_agent_executor.core.logging import get_logger, setup_logging
@@ -114,6 +115,9 @@ def create_app() -> FastAPI:
     # Include API router
     app.include_router(api_router)
 
+    # Register exception handlers
+    register_exception_handlers(app)
+
     # Health check endpoint
     @app.get(
         "/health",
@@ -140,24 +144,6 @@ def create_app() -> FastAPI:
             status="healthy",
             version=settings.app_version,
             environment=settings.environment,
-        )
-
-    # Global exception handler
-    @app.exception_handler(Exception)
-    async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        """Handle uncaught exceptions."""
-        logger.error(
-            "Unhandled exception",
-            exc_info=exc,
-            path=request.url.path,
-            method=request.method,
-        )
-        return JSONResponse(
-            status_code=500,
-            content=ErrorResponse(
-                error_code="INTERNAL_SERVER_ERROR",
-                error_message="An unexpected error occurred",
-            ).model_dump(),
         )
 
     return app

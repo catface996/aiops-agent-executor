@@ -6,7 +6,7 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aiops_agent_executor.db.session import get_db_session
@@ -14,9 +14,16 @@ from aiops_agent_executor.schemas import (
     CredentialCreate,
     CredentialResponse,
     CredentialUpdate,
+    ValidationResult,
 )
+from aiops_agent_executor.services.credential_service import CredentialService
 
 router = APIRouter(tags=["credentials"])
+
+
+def get_credential_service(db: AsyncSession = Depends(get_db_session)) -> CredentialService:
+    """Dependency to get credential service instance."""
+    return CredentialService(db)
 
 
 @router.post(
@@ -66,14 +73,11 @@ router = APIRouter(tags=["credentials"])
 async def create_credential(
     provider_id: uuid.UUID = Path(..., description="供应商ID"),
     credential_in: CredentialCreate = ...,
-    db: AsyncSession = Depends(get_db_session),
+    service: CredentialService = Depends(get_credential_service),
 ) -> CredentialResponse:
     """为供应商添加新的API密钥"""
-    # TODO: Implement credential creation with encryption
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="密钥添加功能尚未实现",
-    )
+    credential = await service.create_credential(provider_id, credential_in)
+    return CredentialResponse.model_validate(credential)
 
 
 @router.get(
@@ -90,7 +94,7 @@ async def create_credential(
 - 状态信息
 
 **脱敏规则**:
-- API Key: `sk-****xxxx`（仅显示末4位）
+- API Key: `****xxxx`（仅显示末4位）
 - Secret Key: 完全隐藏，仅显示是否已配置
 
 **安全提示**:
@@ -103,14 +107,11 @@ async def create_credential(
 )
 async def list_provider_credentials(
     provider_id: uuid.UUID = Path(..., description="供应商ID"),
-    db: AsyncSession = Depends(get_db_session),
+    service: CredentialService = Depends(get_credential_service),
 ) -> list[CredentialResponse]:
     """获取供应商的所有密钥（脱敏显示）"""
-    # TODO: Implement credential listing with masking
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="密钥列表功能尚未实现",
-    )
+    credentials = await service.list_credentials(provider_id)
+    return [CredentialResponse.model_validate(c) for c in credentials]
 
 
 @router.put(
@@ -145,14 +146,11 @@ async def list_provider_credentials(
 async def update_credential(
     credential_id: uuid.UUID = Path(..., description="密钥ID"),
     credential_in: CredentialUpdate = ...,
-    db: AsyncSession = Depends(get_db_session),
+    service: CredentialService = Depends(get_credential_service),
 ) -> CredentialResponse:
     """更新密钥配置"""
-    # TODO: Implement credential update logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="密钥更新功能尚未实现",
-    )
+    credential = await service.update_credential(credential_id, credential_in)
+    return CredentialResponse.model_validate(credential)
 
 
 @router.delete(
@@ -184,18 +182,15 @@ async def update_credential(
 )
 async def delete_credential(
     credential_id: uuid.UUID = Path(..., description="密钥ID"),
-    db: AsyncSession = Depends(get_db_session),
+    service: CredentialService = Depends(get_credential_service),
 ) -> None:
     """删除密钥"""
-    # TODO: Implement credential deletion logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="密钥删除功能尚未实现",
-    )
+    await service.delete_credential(credential_id)
 
 
 @router.post(
     "/credentials/{credential_id}/validate",
+    response_model=ValidationResult,
     summary="验证密钥",
     description="""
 验证密钥的有效性，通过实际调用供应商API进行测试。
@@ -213,9 +208,7 @@ async def delete_credential(
     "validated_at": "2024-01-01T00:00:00Z",
     "details": {
         "account_status": "active",
-        "remaining_quota": 850000,
-        "rate_limit": "10000/min",
-        "permissions": ["chat", "embeddings"]
+        "remaining_quota": 850000
     }
 }
 ```
@@ -226,8 +219,8 @@ async def delete_credential(
     "valid": false,
     "validated_at": "2024-01-01T00:00:00Z",
     "error": {
-        "code": "invalid_api_key",
-        "message": "Incorrect API key provided"
+        "code": "EXPIRED",
+        "message": "Credential has expired"
     }
 }
 ```
@@ -244,11 +237,7 @@ async def delete_credential(
 )
 async def validate_credential(
     credential_id: uuid.UUID = Path(..., description="密钥ID"),
-    db: AsyncSession = Depends(get_db_session),
-) -> dict:
+    service: CredentialService = Depends(get_credential_service),
+) -> ValidationResult:
     """验证密钥有效性"""
-    # TODO: Implement credential validation logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="密钥验证功能尚未实现",
-    )
+    return await service.validate_credential(credential_id)

@@ -3,11 +3,13 @@
 from aiops_agent_executor.db.models.provider import (
     Credential,
     Endpoint,
+    HealthStatus,
     Model,
     ModelStatus,
     ModelType,
     Provider,
     ProviderType,
+    ValidationStatus,
 )
 from aiops_agent_executor.db.models.team import (
     Execution,
@@ -22,7 +24,9 @@ __all__ = [
     "Provider",
     "ProviderType",
     "Endpoint",
+    "HealthStatus",
     "Credential",
+    "ValidationStatus",
     "Model",
     "ModelType",
     "ModelStatus",

@@ -6,7 +6,7 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aiops_agent_executor.db.session import get_db_session
@@ -14,9 +14,16 @@ from aiops_agent_executor.schemas import (
     EndpointCreate,
     EndpointResponse,
     EndpointUpdate,
+    HealthCheckResult,
 )
+from aiops_agent_executor.services.endpoint_service import EndpointService
 
 router = APIRouter(tags=["endpoints"])
+
+
+def get_endpoint_service(db: AsyncSession = Depends(get_db_session)) -> EndpointService:
+    """Dependency to get endpoint service instance."""
+    return EndpointService(db)
 
 
 @router.post(
@@ -67,14 +74,11 @@ router = APIRouter(tags=["endpoints"])
 async def create_endpoint(
     provider_id: uuid.UUID = Path(..., description="供应商ID"),
     endpoint_in: EndpointCreate = ...,
-    db: AsyncSession = Depends(get_db_session),
+    service: EndpointService = Depends(get_endpoint_service),
 ) -> EndpointResponse:
     """为供应商创建新的接入点"""
-    # TODO: Implement endpoint creation logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="接入点创建功能尚未实现",
-    )
+    endpoint = await service.create_endpoint(provider_id, endpoint_in)
+    return EndpointResponse.model_validate(endpoint)
 
 
 @router.get(
@@ -103,14 +107,11 @@ async def create_endpoint(
 )
 async def list_provider_endpoints(
     provider_id: uuid.UUID = Path(..., description="供应商ID"),
-    db: AsyncSession = Depends(get_db_session),
+    service: EndpointService = Depends(get_endpoint_service),
 ) -> list[EndpointResponse]:
     """获取供应商的所有接入点"""
-    # TODO: Implement endpoint listing logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="接入点列表功能尚未实现",
-    )
+    endpoints = await service.list_endpoints(provider_id)
+    return [EndpointResponse.model_validate(e) for e in endpoints]
 
 
 @router.put(
@@ -145,14 +146,11 @@ async def list_provider_endpoints(
 async def update_endpoint(
     endpoint_id: uuid.UUID = Path(..., description="接入点ID"),
     endpoint_in: EndpointUpdate = ...,
-    db: AsyncSession = Depends(get_db_session),
+    service: EndpointService = Depends(get_endpoint_service),
 ) -> EndpointResponse:
     """更新接入点配置"""
-    # TODO: Implement endpoint update logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="接入点更新功能尚未实现",
-    )
+    endpoint = await service.update_endpoint(endpoint_id, endpoint_in)
+    return EndpointResponse.model_validate(endpoint)
 
 
 @router.delete(
@@ -176,18 +174,15 @@ async def update_endpoint(
 )
 async def delete_endpoint(
     endpoint_id: uuid.UUID = Path(..., description="接入点ID"),
-    db: AsyncSession = Depends(get_db_session),
+    service: EndpointService = Depends(get_endpoint_service),
 ) -> None:
     """删除接入点"""
-    # TODO: Implement endpoint deletion logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="接入点删除功能尚未实现",
-    )
+    await service.delete_endpoint(endpoint_id)
 
 
 @router.post(
     "/endpoints/{endpoint_id}/health-check",
+    response_model=HealthCheckResult,
     summary="健康检查",
     description="""
 对指定接入点执行健康检查，验证其可用性。
@@ -195,7 +190,6 @@ async def delete_endpoint(
 **检查内容**:
 - 网络连通性测试
 - API响应时间测量
-- 认证有效性验证（如已配置密钥）
 
 **返回结果**:
 ```json
@@ -204,10 +198,7 @@ async def delete_endpoint(
     "latency_ms": 156,
     "checked_at": "2024-01-01T00:00:00Z",
     "details": {
-        "dns_resolution": "ok",
-        "tcp_connection": "ok",
-        "ssl_handshake": "ok",
-        "api_response": "ok"
+        "http_status": 200
     }
 }
 ```
@@ -225,16 +216,11 @@ async def delete_endpoint(
     responses={
         200: {"description": "健康检查完成"},
         404: {"description": "接入点不存在"},
-        503: {"description": "接入点不可用"},
     },
 )
 async def health_check_endpoint(
     endpoint_id: uuid.UUID = Path(..., description="接入点ID"),
-    db: AsyncSession = Depends(get_db_session),
-) -> dict:
+    service: EndpointService = Depends(get_endpoint_service),
+) -> HealthCheckResult:
     """执行接入点健康检查"""
-    # TODO: Implement health check logic
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="接入点健康检查功能尚未实现",
-    )
+    return await service.health_check(endpoint_id)
